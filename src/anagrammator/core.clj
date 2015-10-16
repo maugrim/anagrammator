@@ -1,7 +1,7 @@
 (ns anagrammator.core
   (:use [clojure.java.io :only [reader]])
-  (:require [clojure.string :as str]
-            [clojure.math.combinatorics :as comb]))
+  (:require clojure.string)
+  (:require clojure.math.combinatorics))
 
 ;; define some utility functions for manipulating tries of words; each trie will be structured
 ;; as a series of nested hashmaps, e.g. to store the words "bar", "barbie", and "baz" we expect the
@@ -25,8 +25,8 @@
   (>= (count word) 5)) ;; more interesting anagrams come out when we use bigger words!
 
 (defn sanitize [text]
-  (->> (str/replace text #"\s" "")
-       (str/lower-case)))
+  (->> (clojure.string/replace text #"\s" "")
+       (clojure.string/lower-case)))
 
 (defn stringify [words]
   (apply str (interpose " " words)))
@@ -34,40 +34,44 @@
 ;; finally, the algorithm for searching in our trie:
 
 (defn decrement-count [freqs key]
-  "Decreases the count of key in a map representing the frequency of multiple keys, e.g.
-   (decrement-count {:a 2 :b 5} :b) --> {:a 2 :b 4}"
   (let [count (get freqs key 0)]
     (if (<= count 1) (dissoc freqs key) (assoc freqs key (dec count)))))
 
-(defn search [dictionary letters]
-  "Given a dictionary structured as a trie containing each word, and a string including all of the
-   letters we have available, searches through the trie and yields each possible anagram of the string."
-  (defn search-in [trie-node freqs]
-    (when-not (nil? trie-node)
-      (concat
-       ;; if we've found a complete word, either return it along with any other anagrams we
-       ;; can make using our remaining letters, starting at the dictionary root -- or, if
-       ;; our letter bag is empty, then just return that word
-       (when-let [current-word (:word-at trie-node)]
-         (if (seq freqs)
-           (map #(conj % current-word) (search-in dictionary freqs))
-           [[current-word]]))
+(defn anagrams-in
+  ([dictionary letters] (anagrams-in dictionary dictionary letters))
+  ([dictionary trie-node letters]
 
-       ;; for each letter left in our bag, find all the anagrams that include that letter,
+     (defn dfs [trie-node letters]
+       ;; for each letter left in our bag, search for all the anagrams that include that letter,
        ;; given the remaining letters which we would have available afterward
-       (mapcat #(search-in (trie-node %) (decrement-count freqs %)) (keys freqs)))))
+       (lazy-seq (mapcat #(anagrams-in dictionary (trie-node %) (decrement-count letters %)) (keys letters))))
 
-  (search-in dictionary (frequencies letters)))
+     ;; four cases:
+     ;;
+     ;; * we have no more letters, and
+     ;;    - we're not at a word: dfs will return an empty collection, no anagrams here
+     ;;    - we're at a word: great, return one new anagram starting with this word
+     ;;
+     ;; * we have more letters, and
+     ;;    - we're not at a word: call dfs to sum all the anagrams we could find
+     ;;                           while choosing any one of our letters
+     ;;    - we're at a word: the above, and also concat any anagrams given the rest
+     ;;                       of our letters if we chose to include this word
 
-(defn anagrams
-  "Returns a lazy sequence consisting of each complete anagram of text made up of words
-   within the contents of dictionary-file."
-  [text dictionary-file]
+     (when-not (nil? trie-node)
+       (let [current-word (:word-at trie-node)
+             anagrams-using-word (map #(conj % current-word) (dfs dictionary letters))
+             anagrams-without-word (dfs trie-node letters)]
+         (cond (and current-word (empty? letters)) [[current-word]]
+               (and current-word (seq letters)) (concat anagrams-using-word anagrams-without-word)
+               :else anagrams-without-word)))))
+
+(defn anagrams [text dictionary-file]
   (let [dictionary (->> (get-words dictionary-file)
                         (map sanitize)
                         (filter is-eligible-word?)
                         (trie-from))]
-    (map stringify (search dictionary (sanitize text)))))
+    (map stringify (anagrams-in dictionary (frequencies (sanitize text))))))
 
 ;; Examples:
 ;;
